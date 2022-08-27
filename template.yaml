@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Image Resizer API SAM
+
+##########################################################################
+#    Parameters                                                          #
+##########################################################################
+
+Parameters:
+  Region:
+    Type: String
+    Default: eu-central-1
+  BucketName:
+    Type: String
+    Default: api-image-resized
+  AppName:
+    Type: String
+    Default: image-resizer
+
+##########################################################################
+#    Globals                                                             #
+##########################################################################
+
+Globals:
+  Function:
+    Runtime: go1.x
+    MemorySize: 128
+    Architectures:
+      - x86_64
+    Timeout: 5
+    Tracing: Active
+    Tags:
+      AppName: !Ref AppName
+
+##########################################################################
+#    Resources                                                           #
+##########################################################################
+
+Resources:
+
+  ##########################################################################
+  #    API                                                                 #
+  ##########################################################################
+
+  ImageResizerApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Description: Image Resizer Api
+      DefaultRouteSettings:
+        DetailedMetricsEnabled: true
+      CorsConfiguration:
+        AllowMethods:
+          - POST
+      AccessLogSettings:
+        DestinationArn: !GetAtt ImageResizerLogGroup.Arn
+        Format: '{"requestTime":"$context.requestTime","requestId":"$context.requestId","httpMethod":"$context.httpMethod","path":"$context.path","routeKey":"$context.routeKey","status":$context.status, "responseLatency":$context.responseLatency,"integrationRequestId":"$context.integration.requestId","functionResponseStatus":"$context.integration.status","integrationLatency":"$context.integration.latency","integrationServiceStatus":"$context.integration.integrationStatus","ip":"$context.identity.sourceIp","userAgent":"$context.identity.userAgent","principalId":"$context.authorizer.principalId"}'
+      Tags:
+        AppName: !Ref AppName
+
+  ##########################################################################
+  #    Functions                                                           #
+  ##########################################################################
+
+  ##########################################################################
+  #    Functions - Image Resize                                           #
+  ##########################################################################
+
+  V1ImageResizerResizeImageFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Join [ "-", [ !Ref AppName, api-v1-image-resize ]]
+      Description: Resize image
+      CodeUri: cmd/functions/api/v1-image-resize
+      Handler: v1-image-resize
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref BucketName
+      Events:
+        HttpApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ImageResizerApi
+            Path: /v1/image/resize
+            Method: Post
+            TimeoutInMillis: 5000
+      Environment:
+        Variables:
+          BucketName: !Ref BucketName
+          
+  ##########################################################################
+  #   S3Bucket                                                             #
+  ##########################################################################
+
+  ImageResizerBucket:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Ref BucketName
+      VersioningConfiguration:
+        Status: Enabled
+
+  ImageResizerBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BucketName
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 's3:GetObject'
+              - 's3:GetObjectVersion'
+            Effect: Allow
+            Resource: !Join
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref BucketName
+                - /*
+            Principal: '*'
+      
+  ##########################################################################
+  #   Log Groups                                                           #
+  ##########################################################################
+
+  ImageResizerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/gateway/image-resizer-api
+      RetentionInDays: 3
+      Tags:
+        - Key: AppName
+          Value: !Ref AppName
+
+##########################################################################
+#    Outputs                                                             #
+##########################################################################
+
+Outputs:
+
+  ImageResizerApiUrl:
+    Description: Image Resizer Api Url
+    Value:
+      Fn::Sub: "https://${ImageResizerApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/"
+  
+  ImageResizerBucket:
+    Description: Image Resized S3 Bucket
+    Value: !Ref BucketName
